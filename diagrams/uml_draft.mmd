@@ -1,0 +1,43 @@
+classDiagram
+    %% PawPal+ class diagram — helps a pet owner plan and explain daily care tasks.
+    %% Keep this file updated so it matches your final implementation.
+
+    class Owner {
+        +str name
+        +int availableTime
+        +dict preferences
+        +setAvailableTime(minutes) void
+        +updatePreferences(prefs) void
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str breed
+        +int age
+        +updateInfo(info) void
+    }
+
+    class Task {
+        +str name
+        +int duration
+        +str priority
+        +bool completed
+        +markComplete() void
+        +updateTask(fields) void
+        +getDetails() str
+    }
+
+    class Scheduler {
+        +list~Task~ tasks
+        +int availableTime
+        +addTask(task) void
+        +sortTasks() list~Task~
+        +generatePlan() list~Task~
+        +explainPlan() str
+    }
+
+    Owner "1" --> "*" Pet : owns
+    Owner "1" --> "1" Scheduler : uses
+    Scheduler "1" o-- "*" Task : manages
+    Task "*" --> "1" Pet : cares for

@@ -5,8 +5,22 @@
 **a. Initial design**
 
 - Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+    My initial UML design consisted of four main classes which are owner, pet, task and scheduler. An Owner owns one or more Pets, a Pet has multiple Tasks, and the Scheduler uses those tasks to create a Schedule.
 
+- What classes did you include, and what responsibilities did you assign to each?
+    I included the following classes:
+        1. Owner
+            Attributes: name, availableTime, preferences
+            Methods: setAvailableTime(), updatePreferences()
+        2. Pet
+            Attributes: name, species, breed, age
+            Methods: updateInfo()
+        3. Task
+            Attributes: name, duration, priority, completed
+            Methods: markComplete(), updateTask(), getDetails()
+        3. Scheduler
+            Attributes: tasks, availableTime
+            Methods: addTask(), sortTasks(), generatePlan(), explainPlan()
 **b. Design changes**
 
 - Did your design change during implementation?
