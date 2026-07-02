@@ -12,18 +12,23 @@ LOWEST_RANK = max(PRIORITY_RANK.values()) + 1
 def _time_to_minutes(time_str: str) -> int | None:
     """Convert an 'HH:MM' time-of-day string to minutes since midnight.
 
-    Returns None for an empty or malformed value so callers can treat those
-    tasks as 'unscheduled' rather than crash on bad input. Parsing to minutes
-    (instead of comparing raw strings) keeps sorting correct even when a time
-    isn't zero-padded, e.g. '9:00' vs '17:00'.
+    Returns None only for an empty string (''), which means 'unscheduled'.
+    Anything non-empty must be a well-formed, in-range clock time: raises
+    ValueError otherwise so bad input fails loudly instead of silently
+    sorting to the end of the day. Parsing to minutes (instead of comparing
+    raw strings) keeps sorting correct even when a time isn't zero-padded,
+    e.g. '9:00' vs '17:00'.
     """
     if not time_str:
         return None
     try:
-        hours, minutes = time_str.split(":")
-        return int(hours) * 60 + int(minutes)
+        hours_str, minutes_str = time_str.split(":")
+        hours, minutes = int(hours_str), int(minutes_str)
     except (ValueError, AttributeError):
-        return None
+        raise ValueError(f"invalid time {time_str!r} (expected 'HH:MM')") from None
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        raise ValueError(f"time {time_str!r} out of range (00:00-23:59)")
+    return hours * 60 + minutes
 
 
 def _time_sort_key(task: Task) -> float:
@@ -43,6 +48,18 @@ class Task:
     completed: bool = False
     due_date: "date | None" = None  # calendar day this instance is due
 
+    def __post_init__(self) -> None:
+        # Validate on construction so no invalid Task can exist. replace() and
+        # the demo/app all funnel through here.
+        self._validate()
+
+    def _validate(self) -> None:
+        """Enforce field invariants: positive duration and a valid/empty time."""
+        if self.duration <= 0:
+            raise ValueError("duration must be a positive number of minutes")
+        # Raises on a malformed or out-of-range time; '' (unscheduled) is fine.
+        _time_to_minutes(self.time)
+
     def mark_complete(self) -> None:
         """Mark this task as done so the scheduler skips it."""
         self.completed = True
@@ -55,6 +72,8 @@ class Task:
             if key not in editable:
                 raise AttributeError(f"'{key}' is not an editable Task field")
             setattr(self, key, value)
+        # setattr bypasses __post_init__, so re-check invariants after editing.
+        self._validate()
 
     def get_details(self) -> str:
         """Return a one-line human-readable summary of the task."""
@@ -73,6 +92,14 @@ class Pet:
     age: int
     tasks: list[Task] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Enforce field invariants: age can't be negative."""
+        if self.age < 0:
+            raise ValueError("age cannot be negative")
+
     def update_info(self, **info) -> None:
         """Update the pet's detail fields (name, species, breed, age) by keyword."""
         # Restricted to details so a stray key can't wipe the tasks list.
@@ -81,9 +108,21 @@ class Pet:
             if key not in details:
                 raise AttributeError(f"'{key}' is not an editable Pet detail")
             setattr(self, key, value)
+        # setattr bypasses __post_init__, so re-check invariants after editing.
+        self._validate()
 
     def add_task(self, task: Task) -> None:
-        """Attach a care task to this pet."""
+        """Attach a care task to this pet, rejecting an exact duplicate.
+
+        A duplicate is a task equal in every field (Task is a dataclass, so ==
+        compares all fields). This blocks accidentally adding the same task
+        twice but never blocks a recurring respawn from complete_task, which
+        differs by due_date/completed.
+        """
+        if task in self.tasks:
+            raise ValueError(
+                f"duplicate task {task.description!r} already exists for {self.name}"
+            )
         self.tasks.append(task)
 
 
@@ -93,6 +132,11 @@ class Owner:
     available_time: int = 0  # minutes available per day
     preferences: dict = field(default_factory=dict)
     pets: list[Pet] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Construction bypasses set_available_time, so guard the invariant here.
+        if self.available_time < 0:
+            raise ValueError("available_time cannot be negative")
 
     def set_available_time(self, minutes: int) -> None:
         """Set how many minutes the owner has for pet care today."""
@@ -223,6 +267,11 @@ class Scheduler:
 
     def generate_plan(self, tasks: list[Task], available_time: int) -> list[Task]:
         """Return the not-done tasks that fit within available_time, in priority order."""
+        # available_time can arrive here directly (bypassing the Owner setter),
+        # so guard it so a negative budget fails loudly instead of silently
+        # producing an empty plan.
+        if available_time < 0:
+            raise ValueError("available_time cannot be negative")
         # Greedily pack sorted tasks, keeping each one that still fits the budget.
         plan: list[Task] = []
         remaining = available_time

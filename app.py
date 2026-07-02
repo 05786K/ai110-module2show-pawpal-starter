@@ -89,15 +89,19 @@ if owner.pets:
     frequency = st.selectbox("Frequency", ["daily", "weekly", "once"])
 
     if st.button("Add task"):
-        owner.pets[pet_index].add_task(
-            Task(
-                description=task_title,
-                duration=int(duration),
-                priority=priority,
-                time=task_time.strftime("%H:%M"),
-                frequency=frequency,
+        try:
+            owner.pets[pet_index].add_task(
+                Task(
+                    description=task_title,
+                    duration=int(duration),
+                    priority=priority,
+                    time=task_time.strftime("%H:%M"),
+                    frequency=frequency,
+                )
             )
-        )
+        except ValueError as err:
+            # e.g. an exact duplicate task, or invalid input — warn, don't crash.
+            st.warning(str(err))
 
     # --- Current tasks: filter by pet/status, and mark tasks done. ---
     st.markdown("#### Current tasks")

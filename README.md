@@ -61,14 +61,38 @@ Total scheduled time: 37 min
 ## 🧪 Testing PawPal+
 
 ```bash
-# Run the full test suite:
-pytest
 
+The suite covers sorting, daily/weekly recurrence, and time-conflict detection, plus input validation and duplicate-task rejection — 59 tests at 100% coverage.
+
+# Run the full test suite:
+python -m pytest
+  ```
+  collected 59 items                                                                                                                                          
+
+  tests\test_pawpal.py ...........................................................                                                                      [100%]
+
+  ==================================================================== 59 passed in 0.08s ====================================================================
+  ```
 # Run with coverage:
 pytest --cov
 ```
-
 Sample test output:
+plugins: anyio-4.14.0, cov-7.1.0
+collected 59 items                                                                                                                                          
+
+tests\test_pawpal.py ...........................................................                                                                      [100%]
+
+====================================================================== tests coverage ======================================================================
+_____________________________________________________ coverage: platform win32, python 3.13.13-final-0 _____________________________________________________
+
+Name                   Stmts   Miss  Cover
+------------------------------------------
+conftest.py                0      0   100%
+pawpal_system.py         162      0   100%
+tests\test_pawpal.py     273      0   100%
+------------------------------------------
+TOTAL                    435      0   100%
+==================================================================== 59 passed in 0.22s ====================================================================
 
 ```
 # Paste your pytest output here
