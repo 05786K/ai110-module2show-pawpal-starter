@@ -8,7 +8,9 @@
       "Read(//c/Users/Khalid/.claude/projects/c--Users-Khalid-Desktop-codePath-A110-projects-ai110-module2show-pawpal-starter/memory/**)",
       "Bash(python -m pytest --cov=pawpal_system --cov-report=term-missing -q)",
       "Bash(python -c \"import coverage; print\\('coverage', coverage.__version__\\)\")",
-      "Bash(python -m pip install pytest-cov -q)"
+      "Bash(python -m pip install pytest-cov -q)",
+      "Bash(ls -1 images)",
+      "Bash(ls -1 Images)"
     ],
     "additionalDirectories": [
       "c:\\Users\\Khalid\\.claude\\projects\\c--Users-Khalid-Desktop-codePath-A110-projects-ai110-module2show-pawpal-starter\\memory"

@@ -1,0 +1,55 @@
+classDiagram
+    %% PawPal+ final class diagram — matches the implementation in pawpal_system.py.
+    %% A pet owner's tasks (attached per Pet) are planned/explained by a stateless Scheduler.
+
+    class Owner {
+        +str name
+        +int available_time
+        +dict preferences
+        +list~Pet~ pets
+        +set_available_time(minutes) void
+        +update_preferences(prefs) void
+        +add_pet(pet) void
+        +all_tasks() list~Task~
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str breed
+        +int age
+        +list~Task~ tasks
+        +update_info(info) void
+        +add_task(task) void
+    }
+
+    class Task {
+        +str description
+        +int duration
+        +str priority
+        +str time
+        +str frequency
+        +bool completed
+        +date due_date
+        +mark_complete() void
+        +update_task(fields) void
+        +get_details() str
+    }
+
+    class Scheduler {
+        +collect_tasks(owner, pet_name) list~Task~
+        +filter_tasks(tasks, status) list~Task~
+        +sort_tasks(tasks) list~Task~
+        +sort_by_time(tasks) list~Task~
+        +next_due_date(task, from_date) date
+        +complete_task(pet, task, today) Task
+        +find_conflicts(tasks) list~tuple~
+        +generate_plan(tasks, available_time) list~Task~
+        +explain_plan(tasks, available_time) str
+    }
+
+    Owner "1" *-- "*" Pet : owns
+    Pet "1" *-- "*" Task : has
+    Scheduler ..> Owner : reads tasks from
+    Scheduler ..> Pet : completes tasks on
+    Scheduler ..> Task : plans & explains

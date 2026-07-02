@@ -103,19 +103,31 @@ if owner.pets:
             # e.g. an exact duplicate task, or invalid input — warn, don't crash.
             st.warning(str(err))
 
-    # --- Current tasks: filter by pet/status, and mark tasks done. ---
+    # --- Current tasks: filter by pet/status, sort, and mark tasks done. ---
     st.markdown("#### Current tasks")
-    fcol1, fcol2 = st.columns(2)
+    fcol1, fcol2, fcol3 = st.columns(3)
     with fcol1:
         # collect_tasks(pet_name=...) scopes the view to one pet.
         pet_filter = st.selectbox("Show pet", ["All pets"] + [p.name for p in owner.pets])
     with fcol2:
         # filter_tasks(status) narrows by completion status.
         status_filter = st.selectbox("Show status", ["all", "pending", "done"])
+    with fcol3:
+        # Surface both Scheduler orderings so the owner can reorder the view.
+        sort_choice = st.selectbox("Sort by", ["Time of day", "Priority"])
 
     scope = None if pet_filter == "All pets" else pet_filter
     visible = scheduler.filter_tasks(scheduler.collect_tasks(owner, pet_name=scope), status_filter)
     visible_ids = {id(t) for t in visible}
+
+    # Heads-up on overlaps before the owner even builds a plan, computed across
+    # the pending tasks in view so conflicts are caught early.
+    conflicts = scheduler.find_conflicts(visible)
+    if conflicts:
+        st.warning(
+            f"⚠️ {len(conflicts)} time conflict(s) among these tasks — "
+            "see details when you build the schedule below."
+        )
 
     if not visible:
         st.caption("No tasks match this filter.")
@@ -123,14 +135,18 @@ if owner.pets:
         shown = [t for t in p.tasks if id(t) in visible_ids]
         if not shown:
             continue
+        # Apply the chosen Scheduler ordering to this pet's visible tasks.
+        if sort_choice == "Time of day":
+            shown = scheduler.sort_by_time(shown)
+        else:
+            shown = scheduler.sort_tasks(shown)
         st.write(f"**{p.name}**")
-        # Snapshot the list so completing a task (which appends a new one) is safe.
-        for i, t in enumerate(list(p.tasks)):
-            if id(t) not in visible_ids:
-                continue
+        for t in shown:
             text_col, btn_col = st.columns([5, 1])
             text_col.text(t.get_details())
-            if not t.completed and btn_col.button("Done", key=f"done_{pet_index}_{p.name}_{i}"):
+            # Key on id(t): stable across reruns (session_state keeps the same
+            # objects) and unique even after sorting reorders the rows.
+            if not t.completed and btn_col.button("Done", key=f"done_{p.name}_{id(t)}"):
                 # Marks complete and, for daily/weekly, queues the next occurrence.
                 scheduler.complete_task(p, t)
                 st.rerun()
@@ -147,9 +163,65 @@ available_time = st.number_input(
 
 if st.button("Generate schedule"):
     owner.set_available_time(int(available_time))
-    # Retrieve tasks across the owner's pets and explain the plan.
+    # Retrieve tasks across the owner's pets and build the plan.
     tasks = scheduler.collect_tasks(owner)
     if not tasks:
         st.warning("No tasks yet. Add some above.")
     else:
-        st.text(scheduler.explain_plan(tasks, owner.available_time))
+        plan = scheduler.generate_plan(tasks, owner.available_time)
+        # Map each task back to its pet so the table can name the pet.
+        pet_of = {id(t): p.name for p in owner.pets for t in p.tasks}
+
+        if not plan:
+            st.warning(
+                "None of your pending tasks fit in the available time. "
+                "Add more minutes above, or shorten/complete some tasks."
+            )
+        else:
+            # Tasks are *selected* by priority, but an owner reads the day in
+            # clock order — so display the winners sorted by time of day.
+            ordered = scheduler.sort_by_time(plan)
+            st.table(
+                [
+                    {
+                        "Time": t.time or "Anytime",
+                        "Pet": pet_of.get(id(t), "—"),
+                        "Task": t.description,
+                        "Duration (min)": t.duration,
+                        "Priority": t.priority,
+                    }
+                    for t in ordered
+                ]
+            )
+            used = sum(t.duration for t in plan)
+            st.success(
+                f"✅ {len(plan)} task(s) scheduled — {used} of "
+                f"{owner.available_time} min used ({owner.available_time - used} min free)."
+            )
+
+        # Warn about overlapping time windows without changing the plan. Each
+        # warning is its own banner so the owner sees exactly which pair clashes
+        # and what to do about it.
+        conflicts = scheduler.find_conflicts(plan)
+        if conflicts:
+            st.markdown("#### ⚠️ Schedule conflicts")
+            for a, b in conflicts:
+                st.warning(
+                    f"**{a.description}** ({a.time}, {a.duration} min) overlaps "
+                    f"**{b.description}** ({b.time}, {b.duration} min).\n\n"
+                    "These run at the same time — consider moving one to a "
+                    "different slot or shortening it."
+                )
+
+        # List anything skipped and why, so the reasoning is transparent.
+        planned_ids = {id(t) for t in plan}
+        skipped = [t for t in tasks if id(t) not in planned_ids]
+        if skipped:
+            with st.expander(f"Skipped tasks ({len(skipped)})"):
+                for t in skipped:
+                    reason = "already done" if t.completed else "not enough time left"
+                    st.write(f"- **{pet_of.get(id(t), '—')}** — {t.get_details()}  _({reason})_")
+
+        # Keep the original text explanation available for a full, copyable view.
+        with st.expander("Full text explanation"):
+            st.text(scheduler.explain_plan(tasks, owner.available_time))
