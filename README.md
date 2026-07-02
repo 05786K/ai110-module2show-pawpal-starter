@@ -47,11 +47,15 @@ pip install -r requirements.txt
 Paste a sample of your app's CLI or Streamlit output here so a reader can see what a generated plan looks like:
 
 ```
-# e.g.:
-# Daily plan for Biscuit (Golden Retriever):
-#   08:00 — Morning walk (30 min) [priority: high]
-#   09:00 — Feeding (10 min) [priority: high]
-#   ...
+========================================================
+Today's Schedule
+Daily plan (60 min available):
+  - 08:00 - Feed Whiskers (5 min) [priority: high]
+  - 08:15 - Feed Buddy (7 min) [priority: high]
+  - 09:00 - Walk Buddy (10 min) [priority: medium]
+  - 17:00 - Play with Whiskers (15 min) [priority: low]
+Total scheduled time: 37 min
+========================================================
 ```
 
 ## 🧪 Testing PawPal+
@@ -72,14 +76,14 @@ Sample test output:
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
+All methods below live on the `Scheduler` class.
 
-| Feature | Method(s) | Notes |
-|---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Feature           | Method(s)                                       | Notes                                                        |
+|-------------------|-------------------------------------------------|--------------------------------------------------------------|
+| Task sorting      | `sort_tasks()`, `sort_by_time()`                | Priority order for selection; time-of-day order for display. |
+| Filtering         | `filter_tasks()`, `collect_tasks(pet_name=...)` | By completion status or by pet name.                         |
+| Conflict handling | `find_conflicts()`                              | Flags overlapping time windows (warning only).               |
+| Recurring tasks   | `complete_task()`, `next_due_date()`            | Spawns the next daily/weekly occurrence via `timedelta`.     |
 
 ## 📸 Demo Walkthrough
 
