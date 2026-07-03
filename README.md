@@ -65,35 +65,36 @@ Total scheduled time: 37 min
 The suite covers sorting, daily/weekly recurrence, and time-conflict detection, plus input validation and duplicate-task rejection — 59 tests at 100% coverage.
 
 # Run the full test suite:
-python -m pytest
-  ```
-  collected 59 items                                                                                                                                          
+# python -m pytest
 
-  tests\test_pawpal.py ...........................................................                                                                      [100%]
-
-  ==================================================================== 59 passed in 0.08s ====================================================================
-  ```
-# Run with coverage:
-pytest --cov
 ```
-Sample test output:
-plugins: anyio-4.14.0, cov-7.1.0
-collected 59 items                                                                                                                                          
+collected 76 items                                                                                                                                                                 
 
-tests\test_pawpal.py ...........................................................                                                                      [100%]
+tests\test_pawpal.py ............................................................................                                                                              [100%]
 
-====================================================================== tests coverage ======================================================================
-_____________________________________________________ coverage: platform win32, python 3.13.13-final-0 _____________________________________________________
+================================================================================ 76 passed in 0.11s =================================================================================
+  
+```
+
+
+# Run with coverage:
+# pytest --cov
+```
+collected 76 items                                                                                                                                                                   
+
+tests\test_pawpal.py ............................................................................                                                                              [100%]
+
+================================================================================== tests coverage ===================================================================================
+_________________________________________________________________ coverage: platform win32, python 3.13.13-final-0 __________________________________________________________________
 
 Name                   Stmts   Miss  Cover
 ------------------------------------------
 conftest.py                0      0   100%
-pawpal_system.py         162      0   100%
-tests\test_pawpal.py     273      0   100%
+pawpal_system.py         223      0   100%
+tests\test_pawpal.py     366      0   100%
 ------------------------------------------
-TOTAL                    435      0   100%
-==================================================================== 59 passed in 0.22s ====================================================================
-
+TOTAL                    589      0   100%
+================================================================================ 76 passed in 0.30s =================================================================================
 ```
 # Paste your pytest output here
 ```
@@ -177,10 +178,207 @@ Conflicts (overlapping times):
 Skipped:
   - 17:00 - Play with Whiskers (15 min) [priority: low] [done]
   ```
+
+## Challenge 2: 💾 Data Persistence
+
+PawPal+ remembers your pets and tasks between runs by saving them to a `data.json` file in the project root.
+
+**Workflow**
+
+1. **On startup**, the app calls `Owner.load_from_json("data.json")`. If the file exists, your owner, pets, and tasks are restored; if not (first run), it starts from a fresh default owner.
+2. **On every change** — adding a pet or task, marking one done, deleting one, renaming the owner, or updating available time — the app auto-saves the full state back to `data.json`. No manual "save" step is needed.
+3. **Next launch**, everything is loaded back exactly as you left it.
+
+**How serialization works**
+
+Rather than a library like `marshmallow`, PawPal+ uses lightweight custom dictionary conversion, since the classes are already dataclasses:
+
+- Each class has `to_dict()` / `from_dict()`. The owner is the aggregate root, so serializing it captures the whole graph (owner → pets → tasks).
+- The only field that isn't natively JSON-serializable is `Task.due_date` (a `datetime.date`), which is stored as an ISO string (`"2026-07-02"`) and parsed back with `date.fromisoformat`.
+- `from_dict()` rebuilds objects through their normal constructors, so validation still runs — a corrupt saved value (e.g. a non-positive duration) fails loudly on load instead of slipping through.
+
+**Files modified for this feature**
+
+- [`pawpal_system.py`](pawpal_system.py) — added `to_dict()` / `from_dict()` on `Task`, `Pet`, and `Owner`, plus `Owner.save_to_json()` and `Owner.load_from_json()`.
+- [`app.py`](app.py) — auto-loads `data.json` on startup and auto-saves after each change.
+- [`tests/test_pawpal.py`](tests/test_pawpal.py) — added round-trip, file save/load, and corrupt-data tests.
+
+
+## Challenge 3: Advanced Priority Scheduling
+
+The work for priority sorting is already done. The application sorts by priority level. Each `Task` carries a **Low / Medium / High** priority, and `Scheduler.sort_tasks()` orders tasks high → medium → low (ranked via `PRIORITY_RANK`), using shorter duration as a tiebreaker. `generate_plan()` builds on this so that when time is limited, the highest-priority tasks are selected first. The UI also exposes this through the **Sort by → Priority** option in the Current tasks view.
+
+### Sample CLI output showing advanced priority sorting
+```
+=== Tasks sorted by time of day ===
+  07:30 - Give Whiskers meds (5 min) [priority: high]
+  08:00 - Feed Whiskers (5 min) [priority: high]
+  08:00 - Feed Buddy (7 min) [priority: high]
+  09:00 - Walk Buddy (10 min) [priority: medium]
+  10:00 - Groom Buddy (20 min) [priority: medium]
+  16:00 - Brush Whiskers (10 min) [priority: low]
+  17:00 - Play with Whiskers (15 min) [priority: low]
+
+=== Tasks sorted by priority (High -> Low) ===
+  08:00 - Feed Whiskers (5 min) [priority: high]
+  07:30 - Give Whiskers meds (5 min) [priority: high]
+  08:00 - Feed Buddy (7 min) [priority: high]
+  09:00 - Walk Buddy (10 min) [priority: medium]
+  10:00 - Groom Buddy (20 min) [priority: medium]
+  16:00 - Brush Whiskers (10 min) [priority: low]
+  17:00 - Play with Whiskers (15 min) [priority: low]
+
+=== Pending tasks only ===
+  08:00 - Feed Whiskers (5 min) [priority: high]
+  07:30 - Give Whiskers meds (5 min) [priority: high]
+  16:00 - Brush Whiskers (10 min) [priority: low]
+  09:00 - Walk Buddy (10 min) [priority: medium]
+  08:00 - Feed Buddy (7 min) [priority: high]
+  10:00 - Groom Buddy (20 min) [priority: medium]
+
+=== Buddy's tasks only ===
+  09:00 - Walk Buddy (10 min) [priority: medium]
+  08:00 - Feed Buddy (7 min) [priority: high]
+  10:00 - Groom Buddy (20 min) [priority: medium]
+
+========================================================
+Today's Schedule
+Daily plan (60 min available):
+  - 07:30 - Give Whiskers meds (5 min) [priority: high]
+  - 08:00 - Feed Whiskers (5 min) [priority: high]
+  - 08:00 - Feed Buddy (7 min) [priority: high]
+  - 09:00 - Walk Buddy (10 min) [priority: medium]
+  - 10:00 - Groom Buddy (20 min) [priority: medium]
+  - 16:00 - Brush Whiskers (10 min) [priority: low]
+Total scheduled time: 57 min
+Conflicts (overlapping times):
+  - Feed Whiskers overlaps Feed Buddy
+Skipped:
+  - 17:00 - Play with Whiskers (15 min) [priority: low] [done] (already done)
+========================================================
+
+=== Recurring task auto-rescheduled ===
+  Completed: 08:00 - Feed Buddy (7 min) [priority: high] [done]
+  Next up:   08:00 - Feed Buddy (7 min) [priority: high] (due 2026-07-03)
+  ```
+
+## Challenge 4: Professional UI and Output Formatting
+
+Both interfaces — the CLI demo (`main.py`) and the Streamlit app (`app.py`) — format tasks with emojis, color-coded indicators, and structured tables instead of plain text lines.
+
+**Formatting features added**
+
+- **Task-type emojis** — each task shows an icon for its kind of care 
+- **Color-coded priority badges** — 🔴 High / 🟡 Medium / 🟢 Low, so importance reads at a glance.
+- **Status indicators** — ✅ Done vs. ⏳ Pending for every task.
+- **Structured tables** — the CLI renders bordered grids via `tabulate`; the Streamlit app shows the plan in an `st.table` with the same icons/badges, plus `st.success` / `st.warning` banners.
+- **Section headers with emojis** — 📅 time view, ⭐ priority view, 🗓️ schedule, 🔁 recurrence.
+
+**Functions and libraries used**
+
+- **`formatting.py`** — a shared module so the CLI and Streamlit UI format consistently: `type_icon()` (keyword → emoji), `priority_badge()` (level → color-dot label), and `status_icon()` (done/pending).
+- **[`tabulate`](https://pypi.org/project/tabulate/)** (added to `requirements.txt`) — the CLI's `task_table()` renders grids via `tabulate(rows, headers, tablefmt="rounded_grid")`.
+- **Streamlit** — `app.py` applies the same helpers to its schedule table and task list; `st.success` / `st.warning` / `st.table` supply the visual structure.
+- `sys.stdout.reconfigure(encoding="utf-8")` in `main.py` — forces UTF-8 output so emojis render in the Windows console (which defaults to cp1252).
+
+**Sample formatted output**
+
+```
+📅  Tasks sorted by time of day
+╭───────────┬──────────────────────┬────────┬────────────┬────────────╮
+│ Status    │ Task                 │ Time   │ Duration   │ Priority   │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 💊 Give Whiskers meds │ 07:30  │ 5 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🍽️ Feed Whiskers     │ 08:00  │ 5 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🍽️ Feed Buddy        │ 08:00  │ 7 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🚶 Walk Buddy         │ 09:00  │ 10 min     │ 🟡 Medium   │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ ✂️ Groom Buddy       │ 10:00  │ 20 min     │ 🟡 Medium   │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🧼 Brush Whiskers     │ 16:00  │ 10 min     │ 🟢 Low      │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🎾 Play with Whiskers │ 17:00  │ 15 min     │ 🟢 Low      │
+╰───────────┴──────────────────────┴────────┴────────────┴────────────╯
+
+⭐  Tasks sorted by priority (High → Low)
+╭───────────┬──────────────────────┬────────┬────────────┬────────────╮
+│ Status    │ Task                 │ Time   │ Duration   │ Priority   │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🍽️ Feed Whiskers     │ 08:00  │ 5 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 💊 Give Whiskers meds │ 07:30  │ 5 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🍽️ Feed Buddy        │ 08:00  │ 7 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🚶 Walk Buddy         │ 09:00  │ 10 min     │ 🟡 Medium   │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ ✂️ Groom Buddy       │ 10:00  │ 20 min     │ 🟡 Medium   │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🧼 Brush Whiskers     │ 16:00  │ 10 min     │ 🟢 Low      │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🎾 Play with Whiskers │ 17:00  │ 15 min     │ 🟢 Low      │
+╰───────────┴──────────────────────┴────────┴────────────┴────────────╯
+
+⏳  Pending tasks only
+╭───────────┬──────────────────────┬────────┬────────────┬────────────╮
+│ Status    │ Task                 │ Time   │ Duration   │ Priority   │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🍽️ Feed Whiskers     │ 08:00  │ 5 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 💊 Give Whiskers meds │ 07:30  │ 5 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🧼 Brush Whiskers     │ 16:00  │ 10 min     │ 🟢 Low      │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🚶 Walk Buddy         │ 09:00  │ 10 min     │ 🟡 Medium   │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🍽️ Feed Buddy        │ 08:00  │ 7 min      │ 🔴 High     │
+├───────────┼──────────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ ✂️ Groom Buddy       │ 10:00  │ 20 min     │ 🟡 Medium   │
+╰───────────┴──────────────────────┴────────┴────────────┴────────────╯
+
+🐕  Buddy's tasks only
+╭───────────┬────────────────┬────────┬────────────┬────────────╮
+│ Status    │ Task           │ Time   │ Duration   │ Priority   │
+├───────────┼────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🚶 Walk Buddy   │ 09:00  │ 10 min     │ 🟡 Medium   │
+├───────────┼────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ 🍽️ Feed Buddy  │ 08:00  │ 7 min      │ 🔴 High     │
+├───────────┼────────────────┼────────┼────────────┼────────────┤
+│ ⏳ Pending │ ✂️ Groom Buddy │ 10:00  │ 20 min     │ 🟡 Medium   │
+╰───────────┴────────────────┴────────┴────────────┴────────────╯
+
+========================================================
+🗓️  Today's Schedule
+Daily plan (60 min available):
+  - 07:30 - Give Whiskers meds (5 min) [priority: high]
+  - 08:00 - Feed Whiskers (5 min) [priority: high]
+  - 08:00 - Feed Buddy (7 min) [priority: high]
+  - 09:00 - Walk Buddy (10 min) [priority: medium]
+  - 10:00 - Groom Buddy (20 min) [priority: medium]
+  - 16:00 - Brush Whiskers (10 min) [priority: low]
+Total scheduled time: 57 min
+Conflicts (overlapping times):
+  - Feed Whiskers overlaps Feed Buddy
+Skipped:
+  - 17:00 - Play with Whiskers (15 min) [priority: low] [done] (already done)
+========================================================
+
+🔁  Recurring task auto-rescheduled
+  Completed: ✅ Done  08:00 - Feed Buddy (7 min) [priority: high] [done]
+  Next up:   ⏳ Pending  08:00 - Feed Buddy (7 min) [priority: high] (due 2026-07-03)
+
+
+
+```
+
 **Screenshots**:
 
 ![PawPal+ screenshot 1](images/image1.jpg)
 
 ![PawPal+ screenshot 2](images/image2.jpg)
 
+![PawPal+ screenshot 3](images/finalUI_image.jpg)
 

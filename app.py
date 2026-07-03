@@ -1,6 +1,8 @@
+import os
 from datetime import time
 
 import streamlit as st
+from formatting import priority_badge, status_icon, type_icon
 from pawpal_system import Owner, Pet, Task, Scheduler
 
 
@@ -10,53 +12,86 @@ st.title("🐾 PawPal+")
 
 st.markdown(
     """
-Welcome to the PawPal+ starter app.
-
-This file is intentionally thin. It gives you a working Streamlit app so you can start quickly,
-but **it does not implement the project logic**. Your job is to design the system and build it.
-
-Use this app as your interactive demo once your backend classes/functions exist.
+Welcome to the PawPal+ starter app. This is a pet care planning assistant that helps a pet owner plan care tasks for their pet(s) based on constraints like time, priority, and preferences.
 """
 )
 
-with st.expander("Scenario", expanded=True):
-    st.markdown(
-        """
-**PawPal+** is a pet care planning assistant. It helps a pet owner plan care tasks
-for their pet(s) based on constraints like time, priority, and preferences.
+# with st.expander("Scenario", expanded=True):
+#     st.markdown(
+#         """
+# **PawPal+** is a pet care planning assistant. It helps a pet owner plan care tasks
+# for their pet(s) based on constraints like time, priority, and preferences.
+# """
+#     )
 
-You will design and implement the scheduling logic and connect it to this Streamlit UI.
-"""
-    )
 
-with st.expander("What you need to build", expanded=True):
-    st.markdown(
-        """
-At minimum, your system should:
-- Represent pet care tasks (what needs to happen, how long it takes, priority)
-- Represent the pet and the owner (basic info and preferences)
-- Build a plan/schedule for a day that chooses and orders tasks based on constraints
-- Explain the plan (why each task was chosen and when it happens)
-"""
-    )
+# with st.expander("What you need to build", expanded=True):
+#     st.markdown(
+#         """
+# At minimum, your system should:
+# - Represent pet care tasks (what needs to happen, how long it takes, priority)
+# - Represent the pet and the owner (basic info and preferences)
+# - Build a plan/schedule for a day that chooses and orders tasks based on constraints
+# - Explain the plan (why each task was chosen and when it happens)
+# """
+#     )
 
-st.divider()
+# st.divider()
 
 st.subheader("Owner & Pets")
 
-# Persist the Owner (with its pets and tasks) across reruns.
+# Data persists to this file between runs (see Owner.save_to_json/load_from_json).
+DATA_FILE = "data.json"
+
+# Load saved state on first load; fall back to a fresh Owner if there's no file
+# yet (first run) or it can't be parsed.
 if "owner" not in st.session_state:
-    st.session_state.owner = Owner(name="Jordan", available_time=60)
+    try:
+        st.session_state.owner = Owner.load_from_json(DATA_FILE)
+    except (FileNotFoundError, ValueError, KeyError):
+        st.session_state.owner = Owner(name="Jordan", available_time=60)
 owner = st.session_state.owner
 scheduler = Scheduler()
 
-owner.name = st.text_input("Owner name", value=owner.name)
+
+# --- Reset: wipe all saved data and start from a clean default owner. ---
+# Tucked in the sidebar behind a confirm checkbox so it can't be hit by
+# accident — it's destructive and irreversible.
+with st.sidebar:
+    st.markdown("### ⚠️ Reset all data")
+    st.caption("Deletes every pet, task, and setting. This cannot be undone.")
+    confirm_reset = st.checkbox("I understand this erases everything")
+    if st.button("Reset all data", disabled=not confirm_reset):
+        # Remove the on-disk save so a reload can't resurrect the old state,
+        # then drop the in-memory owner. On rerun, the load block above finds
+        # no file and rebuilds the seeded default owner.
+        if os.path.exists(DATA_FILE):
+            os.remove(DATA_FILE)
+        st.session_state.pop("owner", None)
+        st.rerun()
+
+
+def persist() -> None:
+    """Auto-save the whole owner graph so changes survive a refresh/restart."""
+    owner.save_to_json(DATA_FILE)
+
+
+# Persist the name only when it actually changes (avoids writing every rerun).
+new_name = st.text_input("Owner name", value=owner.name)
+if new_name != owner.name:
+    owner.name = new_name
+    persist()
 
 # --- Adding a Pet: calls Owner.add_pet() ---
 pet_name = st.text_input("Pet name", value="Mochi")
 species = st.selectbox("Species", ["dog", "cat", "other"])
 if st.button("Add pet"):
-    owner.add_pet(Pet(name=pet_name, species=species, breed="", age=0))
+    try:
+        owner.add_pet(Pet(name=pet_name, species=species, breed="", age=0))
+        persist()
+    except ValueError as err:
+        # e.g. a pet with this name already exists — warn, don't crash.
+        st.warning(str(err))
 
 if owner.pets:
     st.write("Pets:", ", ".join(p.name for p in owner.pets))
@@ -88,6 +123,21 @@ if owner.pets:
     # Frequency drives recurrence: completing a daily/weekly task spawns the next.
     frequency = st.selectbox("Frequency", ["daily", "weekly", "once"])
 
+    # Suggest the earliest conflict-free slot for a task of this duration,
+    # checked against every task the owner already has scheduled.
+    if st.button("🔍 Suggest a free time"):
+        slot = scheduler.find_free_slot(scheduler.collect_tasks(owner), int(duration))
+        if slot:
+            st.info(
+                f"Earliest free {int(duration)}-min slot: **{slot}** — no overlap "
+                f"with existing tasks. Set **Time of day** to {slot}, then add the task."
+            )
+        else:
+            st.warning(
+                "No free slot fits that duration in the day (06:00–22:00). "
+                "Try a shorter task or completing something first."
+            )
+
     if st.button("Add task"):
         try:
             owner.pets[pet_index].add_task(
@@ -99,6 +149,7 @@ if owner.pets:
                     frequency=frequency,
                 )
             )
+            persist()
         except ValueError as err:
             # e.g. an exact duplicate task, or invalid input — warn, don't crash.
             st.warning(str(err))
@@ -142,13 +193,21 @@ if owner.pets:
             shown = scheduler.sort_tasks(shown)
         st.write(f"**{p.name}**")
         for t in shown:
-            text_col, btn_col = st.columns([5, 1])
-            text_col.text(t.get_details())
+            text_col, done_col, del_col = st.columns([5, 1, 1])
+            # Status + task-type icons make each row scannable at a glance.
+            text_col.write(f"{status_icon(t.completed)} {type_icon(t.description)} {t.get_details()}")
             # Key on id(t): stable across reruns (session_state keeps the same
             # objects) and unique even after sorting reorders the rows.
-            if not t.completed and btn_col.button("Done", key=f"done_{p.name}_{id(t)}"):
+            if not t.completed and done_col.button("Done", key=f"done_{p.name}_{id(t)}"):
                 # Marks complete and, for daily/weekly, queues the next occurrence.
                 scheduler.complete_task(p, t)
+                persist()
+                st.rerun()
+            # Delete removes the task outright — handy for resolving a conflict
+            # by dropping the task the owner doesn't want.
+            if del_col.button("🗑️", key=f"del_{p.name}_{id(t)}", help="Delete this task"):
+                p.remove_task(t)
+                persist()
                 st.rerun()
 else:
     st.caption("Add a pet first to attach tasks.")
@@ -163,6 +222,7 @@ available_time = st.number_input(
 
 if st.button("Generate schedule"):
     owner.set_available_time(int(available_time))
+    persist()  # remember the updated available time
     # Retrieve tasks across the owner's pets and build the plan.
     tasks = scheduler.collect_tasks(owner)
     if not tasks:
@@ -186,9 +246,9 @@ if st.button("Generate schedule"):
                     {
                         "Time": t.time or "Anytime",
                         "Pet": pet_of.get(id(t), "—"),
-                        "Task": t.description,
+                        "Task": f"{type_icon(t.description)} {t.description}",
                         "Duration (min)": t.duration,
-                        "Priority": t.priority,
+                        "Priority": priority_badge(t.priority),
                     }
                     for t in ordered
                 ]
@@ -206,11 +266,19 @@ if st.button("Generate schedule"):
         if conflicts:
             st.markdown("#### ⚠️ Schedule conflicts")
             for a, b in conflicts:
+                # Suggest where the second task could move: the earliest free
+                # slot checked against every other planned task (a included).
+                others = [t for t in plan if t is not b]
+                alt = scheduler.find_free_slot(others, b.duration)
+                fix = (
+                    f" Try moving **{b.description}** to **{alt}**."
+                    if alt
+                    else " No free slot is available — consider shortening one task."
+                )
                 st.warning(
                     f"**{a.description}** ({a.time}, {a.duration} min) overlaps "
                     f"**{b.description}** ({b.time}, {b.duration} min).\n\n"
-                    "These run at the same time — consider moving one to a "
-                    "different slot or shortening it."
+                    f"These run at the same time.{fix}"
                 )
 
         # List anything skipped and why, so the reasoning is transparent.

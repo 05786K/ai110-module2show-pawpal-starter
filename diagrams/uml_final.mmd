@@ -1,6 +1,7 @@
 classDiagram
     %% PawPal+ final class diagram — matches the implementation in pawpal_system.py.
     %% A pet owner's tasks (attached per Pet) are planned/explained by a stateless Scheduler.
+    %% Owner is the aggregate root: it (with its pets and tasks) serializes to/from JSON.
 
     class Owner {
         +str name
@@ -11,6 +12,10 @@ classDiagram
         +update_preferences(prefs) void
         +add_pet(pet) void
         +all_tasks() list~Task~
+        +to_dict() dict
+        +from_dict(data)$ Owner
+        +save_to_json(path) void
+        +load_from_json(path)$ Owner
     }
 
     class Pet {
@@ -19,8 +24,12 @@ classDiagram
         +str breed
         +int age
         +list~Task~ tasks
+        -_validate() void
         +update_info(info) void
         +add_task(task) void
+        +remove_task(task) void
+        +to_dict() dict
+        +from_dict(data)$ Pet
     }
 
     class Task {
@@ -31,9 +40,12 @@ classDiagram
         +str frequency
         +bool completed
         +date due_date
+        -_validate() void
         +mark_complete() void
         +update_task(fields) void
         +get_details() str
+        +to_dict() dict
+        +from_dict(data)$ Task
     }
 
     class Scheduler {
@@ -44,8 +56,19 @@ classDiagram
         +next_due_date(task, from_date) date
         +complete_task(pet, task, today) Task
         +find_conflicts(tasks) list~tuple~
+        +find_free_slot(tasks, duration, day_start, day_end, earliest) str
         +generate_plan(tasks, available_time) list~Task~
         +explain_plan(tasks, available_time) str
+    }
+
+    %% Module-level helpers (pawpal_system.py) supporting time math and sorting.
+    class helpers {
+        <<module>>
+        +dict PRIORITY_RANK
+        +int LOWEST_RANK
+        +_time_to_minutes(time_str) int
+        +_minutes_to_time(minutes) str
+        +_time_sort_key(task) float
     }
 
     Owner "1" *-- "*" Pet : owns
@@ -53,3 +76,5 @@ classDiagram
     Scheduler ..> Owner : reads tasks from
     Scheduler ..> Pet : completes tasks on
     Scheduler ..> Task : plans & explains
+    Scheduler ..> helpers : uses
+    Task ..> helpers : validates time

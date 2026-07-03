@@ -260,6 +260,70 @@ def test_find_conflicts_reports_all_overlapping_pairs():
 
 
 # ---------------------------------------------------------------------------
+# Next available slot — suggest the earliest conflict-free start time
+# ---------------------------------------------------------------------------
+
+def test_find_free_slot_returns_day_start_when_empty():
+    # Nothing scheduled: the first slot is the start of the day window.
+    scheduler = Scheduler()
+    assert scheduler.find_free_slot([], duration=30) == "06:00"
+
+
+def test_find_free_slot_finds_gap_between_tasks():
+    # 08:00-08:30 busy, 09:00-10:00 busy. A 20-min task fits from 08:30.
+    scheduler = Scheduler()
+    a = Task(description="Feed", duration=30, priority="high", time="08:00")
+    b = Task(description="Walk", duration=60, priority="medium", time="09:00")
+    assert scheduler.find_free_slot([a, b], duration=20, day_start="08:00") == "08:30"
+
+
+def test_find_free_slot_skips_gap_too_small():
+    # Only a 15-min gap between 08:30 and 09:00 — a 30-min task must land later.
+    scheduler = Scheduler()
+    a = Task(description="Feed", duration=30, priority="high", time="08:00")  # 08:00-08:30
+    b = Task(description="Walk", duration=60, priority="medium", time="08:45")  # 08:45-09:45
+    # Gap 08:30-08:45 is only 15 min; task goes after the second block, at 09:45.
+    assert scheduler.find_free_slot([a, b], duration=30, day_start="08:00") == "09:45"
+
+
+def test_find_free_slot_respects_earliest():
+    # `earliest` pushes the search past a time even when earlier slots are free.
+    scheduler = Scheduler()
+    assert scheduler.find_free_slot([], duration=30, earliest="14:00") == "14:00"
+
+
+def test_find_free_slot_ignores_completed_and_unscheduled():
+    # Completed / unscheduled tasks don't occupy the clock, so 06:00 stays free.
+    scheduler = Scheduler()
+    done = Task(description="Feed", duration=120, priority="high", time="06:00")
+    done.mark_complete()
+    anytime = Task(description="Brush", duration=120, priority="low")  # no time
+    assert scheduler.find_free_slot([done, anytime], duration=30) == "06:00"
+
+
+def test_find_free_slot_handles_nested_busy_block():
+    # A short task fully inside a longer one: once the cursor has passed the
+    # long block, the nested block is already behind it and is skipped.
+    scheduler = Scheduler()
+    long = Task(description="Groom", duration=60, priority="high", time="08:00")  # 08:00-09:00
+    nested = Task(description="Feed", duration=15, priority="high", time="08:15")  # 08:15-08:30
+    slot = scheduler.find_free_slot([long, nested], duration=30, day_start="08:00")
+    assert slot == "09:00"
+
+
+def test_find_free_slot_returns_none_when_day_full():
+    # A task that can't finish by day_end has nowhere to go.
+    scheduler = Scheduler()
+    block = Task(description="All day", duration=600, priority="high", time="12:00")  # 12:00-22:00
+    assert scheduler.find_free_slot([block], duration=60, day_start="12:00") is None
+
+
+def test_find_free_slot_rejects_non_positive_duration():
+    with pytest.raises(ValueError):
+        Scheduler().find_free_slot([], duration=0)
+
+
+# ---------------------------------------------------------------------------
 # Plan generation & explanation
 # ---------------------------------------------------------------------------
 
@@ -407,6 +471,79 @@ def test_set_available_time_rejects_negative():
 
 
 # ---------------------------------------------------------------------------
+# Persistence — save/load owner graph to JSON, round-tripping cleanly
+# ---------------------------------------------------------------------------
+
+def _sample_owner():
+    owner = Owner(name="Jordan", available_time=90, preferences={"walks": True})
+    pet = Pet(name="Buddy", species="dog", breed="Golden", age=5)
+    pet.add_task(Task(description="Walk", duration=10, priority="medium", time="09:00"))
+    done = Task(description="Feed", duration=5, priority="high", time="08:00")
+    done.mark_complete()
+    done.due_date = date(2026, 7, 2)
+    pet.add_task(done)
+    owner.add_pet(pet)
+    return owner
+
+
+def test_task_dict_round_trip_preserves_due_date():
+    task = Task(description="Feed", duration=5, priority="high", time="08:00", frequency="daily")
+    task.due_date = date(2026, 7, 2)
+    restored = Task.from_dict(task.to_dict())
+    assert restored == task  # dataclass == compares every field, incl. date
+
+
+def test_task_dict_round_trip_with_no_due_date():
+    task = Task(description="Brush", duration=5, priority="low")
+    restored = Task.from_dict(task.to_dict())
+    assert restored == task
+    assert restored.due_date is None
+
+
+def test_owner_dict_round_trip_rebuilds_full_graph():
+    owner = _sample_owner()
+    restored = Owner.from_dict(owner.to_dict())
+    assert restored == owner  # owner, pets, and tasks all compare equal
+
+
+def test_save_and_load_from_json_file(tmp_path):
+    owner = _sample_owner()
+    path = tmp_path / "data.json"
+    owner.save_to_json(str(path))
+    loaded = Owner.load_from_json(str(path))
+    assert loaded == owner
+    # The saved due_date survives as a real date, not a string.
+    assert loaded.pets[0].tasks[1].due_date == date(2026, 7, 2)
+
+
+def test_load_from_json_missing_file_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        Owner.load_from_json(str(tmp_path / "does_not_exist.json"))
+
+
+def test_from_dict_defaults_for_minimal_data():
+    # Missing optional keys fall back to sensible defaults (empty/pending).
+    owner = Owner.from_dict({"name": "Solo"})
+    assert owner.available_time == 0
+    assert owner.pets == []
+    task = Task.from_dict({"description": "x", "duration": 5, "priority": "high"})
+    assert task.time == "" and task.completed is False and task.due_date is None
+
+
+def test_load_rejects_corrupt_value(tmp_path):
+    # A persisted bad duration must fail validation on load, not slip through.
+    path = tmp_path / "bad.json"
+    path.write_text(
+        '{"name": "Jordan", "pets": [{"name": "Buddy", "species": "dog", '
+        '"breed": "", "age": 0, "tasks": [{"description": "x", "duration": 0, '
+        '"priority": "high"}]}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        Owner.load_from_json(str(path))
+
+
+# ---------------------------------------------------------------------------
 # Duplicate-task rejection
 # ---------------------------------------------------------------------------
 
@@ -418,9 +555,37 @@ def test_add_task_rejects_exact_duplicate():
     assert len(pet.tasks) == 1
 
 
+def test_remove_task_deletes_only_that_instance():
+    # remove_task matches by identity, so only the held object is dropped.
+    pet = Pet(name="Buddy", species="dog", breed="Golden", age=5)
+    walk = Task(description="Walk", duration=10, priority="medium", time="09:00")
+    feed = Task(description="Feed", duration=5, priority="high", time="08:00")
+    pet.add_task(walk)
+    pet.add_task(feed)
+    pet.remove_task(walk)
+    assert pet.tasks == [feed]
+
+
+def test_remove_task_not_attached_raises():
+    pet = Pet(name="Buddy", species="dog", breed="Golden", age=5)
+    stray = Task(description="Ghost", duration=5, priority="low")
+    with pytest.raises(ValueError):
+        pet.remove_task(stray)
+
+
 def test_add_task_allows_near_duplicate_differing_by_one_field():
     pet = Pet(name="Buddy", species="dog", breed="Golden", age=5)
     pet.add_task(Task(description="Walk", duration=10, priority="medium", time="09:00"))
     # Same everything but a different duration — not an exact duplicate.
     pet.add_task(Task(description="Walk", duration=15, priority="medium", time="09:00"))
     assert len(pet.tasks) == 2
+
+
+def test_add_pet_rejects_duplicate_name_case_insensitive():
+    # Two pets with the same name (ignoring case) are the same pet — reject the
+    # second so the owner can't accidentally register a duplicate.
+    owner = Owner(name="Micky")
+    owner.add_pet(Pet(name="Buddy", species="dog", breed="Golden", age=5))
+    with pytest.raises(ValueError):
+        owner.add_pet(Pet(name="buddy", species="cat", breed="Siamese", age=3))
+    assert len(owner.pets) == 1

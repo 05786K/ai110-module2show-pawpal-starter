@@ -3,3 +3,6 @@ __pycache__/
 .venv_new/
 .pytest_cache/
 .DS_Store
+
+# Runtime data saved by the app (see Data Persistence in the README)
+data.json

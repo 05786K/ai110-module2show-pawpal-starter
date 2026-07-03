@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
@@ -29,6 +30,16 @@ def _time_to_minutes(time_str: str) -> int | None:
     if not (0 <= hours <= 23 and 0 <= minutes <= 59):
         raise ValueError(f"time {time_str!r} out of range (00:00-23:59)")
     return hours * 60 + minutes
+
+
+def _minutes_to_time(minutes: int) -> str:
+    """Convert minutes since midnight back to a zero-padded 'HH:MM' string.
+
+    Inverse of _time_to_minutes for the scheduled range, so a slot computed as
+    an integer can be handed back to the UI (and re-parsed) as a clock time.
+    """
+    hours, mins = divmod(minutes, 60)
+    return f"{hours:02d}:{mins:02d}"
 
 
 def _time_sort_key(task: Task) -> float:
@@ -83,6 +94,41 @@ class Task:
         due = f" (due {self.due_date})" if self.due_date else ""
         return f"{when}{self.description} ({self.duration} min) [priority: {self.priority}]{due}{status}"
 
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-friendly dict.
+
+        due_date is a datetime.date (not JSON-serializable), so it's stored as
+        an ISO string ('2026-07-02') — or None when the task has no due date.
+        Every other field is already a plain JSON type.
+        """
+        return {
+            "description": self.description,
+            "duration": self.duration,
+            "priority": self.priority,
+            "time": self.time,
+            "frequency": self.frequency,
+            "completed": self.completed,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        """Rebuild a Task from to_dict() output.
+
+        Construction runs __post_init__, so a corrupt saved value (bad duration
+        or time) still fails validation on load rather than sneaking in.
+        """
+        due = data.get("due_date")
+        return cls(
+            description=data["description"],
+            duration=data["duration"],
+            priority=data["priority"],
+            time=data.get("time", ""),
+            frequency=data.get("frequency", "daily"),
+            completed=data.get("completed", False),
+            due_date=date.fromisoformat(due) if due else None,
+        )
+
 
 @dataclass
 class Pet:
@@ -125,6 +171,43 @@ class Pet:
             )
         self.tasks.append(task)
 
+    def remove_task(self, task: Task) -> None:
+        """Remove a specific task instance from this pet.
+
+        Matches by identity (the exact object), not by value, so removing one
+        of several equal-looking tasks deletes only the one the caller holds.
+        Raises ValueError if the task isn't attached to this pet.
+        """
+        for i, existing in enumerate(self.tasks):
+            if existing is task:
+                del self.tasks[i]
+                return
+        raise ValueError(f"task {task.description!r} is not attached to {self.name}")
+
+    def to_dict(self) -> dict:
+        """Serialize this pet and its tasks to a JSON-friendly dict."""
+        return {
+            "name": self.name,
+            "species": self.species,
+            "breed": self.breed,
+            "age": self.age,
+            "tasks": [task.to_dict() for task in self.tasks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Pet":
+        """Rebuild a Pet (and its tasks) from to_dict() output."""
+        pet = cls(
+            name=data["name"],
+            species=data["species"],
+            breed=data["breed"],
+            age=data["age"],
+        )
+        # Restore tasks directly rather than via add_task: the saved data is
+        # already de-duplicated, and this preserves exactly what was persisted.
+        pet.tasks = [Task.from_dict(t) for t in data.get("tasks", [])]
+        return pet
+
 
 @dataclass
 class Owner:
@@ -150,13 +233,58 @@ class Owner:
         self.preferences.update(prefs)
 
     def add_pet(self, pet: Pet) -> None:
-        """Register a pet under this owner."""
+        """Register a pet under this owner, rejecting a duplicate name.
+
+        Two pets with the same name (case-insensitive) are treated as the same
+        pet, so this blocks adding "Mochi" twice while still allowing distinct
+        names. Mirrors Pet.add_task's duplicate guard.
+        """
+        if any(existing.name.lower() == pet.name.lower() for existing in self.pets):
+            raise ValueError(f"a pet named {pet.name!r} already exists")
         self.pets.append(pet)
 
     def all_tasks(self) -> list[Task]:
         """Return every task across all of this owner's pets as one flat list."""
         # This is the single access point the Scheduler pulls from.
         return [task for pet in self.pets for task in pet.tasks]
+
+    def to_dict(self) -> dict:
+        """Serialize the whole owner graph (owner -> pets -> tasks) to a dict."""
+        return {
+            "name": self.name,
+            "available_time": self.available_time,
+            "preferences": self.preferences,
+            "pets": [pet.to_dict() for pet in self.pets],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Owner":
+        """Rebuild a full Owner (with pets and tasks) from to_dict() output."""
+        owner = cls(
+            name=data["name"],
+            available_time=data.get("available_time", 0),
+            preferences=dict(data.get("preferences", {})),
+        )
+        owner.pets = [Pet.from_dict(p) for p in data.get("pets", [])]
+        return owner
+
+    def save_to_json(self, path: str = "data.json") -> None:
+        """Persist this owner (with pets and tasks) to a JSON file.
+
+        Owner is the aggregate root, so saving it captures the entire state.
+        """
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(self.to_dict(), file, indent=2)
+
+    @classmethod
+    def load_from_json(cls, path: str = "data.json") -> "Owner":
+        """Load an owner previously saved with save_to_json().
+
+        Raises FileNotFoundError if the file doesn't exist, so a first-run
+        caller can catch it and start from a fresh Owner instead.
+        """
+        with open(path, "r", encoding="utf-8") as file:
+            return cls.from_dict(json.load(file))
 
 
 class Scheduler:
@@ -264,6 +392,60 @@ class Scheduler:
                 if a_start < b_end and b_start < a_end:
                     conflicts.append((a, b))
         return conflicts
+
+    def find_free_slot(
+        self,
+        tasks: list[Task],
+        duration: int,
+        day_start: str = "06:00",
+        day_end: str = "22:00",
+        earliest: str | None = None,
+    ) -> str | None:
+        """Return the earliest 'HH:MM' start time that fits a `duration`-minute
+        task without overlapping any scheduled, not-done task.
+
+        Sweeps the day from `day_start` (or `earliest`, whichever is later) to
+        `day_end`, treating each scheduled + incomplete task as a busy
+        [start, start + duration) window. Returns the first gap large enough to
+        hold `duration` minutes and still finish by `day_end`, or None if the
+        day is too full. Unscheduled ('') and completed tasks don't occupy the
+        clock, so they're ignored — the same rule find_conflicts() uses. This
+        turns conflict *detection* into a concrete suggestion the owner can act
+        on.
+        """
+        if duration <= 0:
+            raise ValueError("duration must be a positive number of minutes")
+        window_start = _time_to_minutes(day_start)
+        window_end = _time_to_minutes(day_end)
+        # `earliest` lets a caller demand a slot no sooner than a given time.
+        if earliest:
+            window_start = max(window_start, _time_to_minutes(earliest))
+
+        # Busy [start, end) windows from scheduled, not-done tasks, by start time.
+        busy = []
+        for task in tasks:
+            start = _time_to_minutes(task.time)
+            if task.completed or start is None:
+                continue
+            busy.append((start, start + task.duration))
+        busy.sort()
+
+        # Advance a cursor over the day, keeping it at the earliest free minute.
+        cursor = window_start
+        for start, end in busy:
+            # A busy block entirely behind the cursor can't affect us.
+            if end <= cursor:
+                continue
+            # Enough room between the cursor and this block? Take it.
+            if start - cursor >= duration:
+                break
+            # Otherwise skip past this block and keep looking.
+            cursor = max(cursor, end)
+
+        # Valid only if the task still finishes within the day window.
+        if cursor + duration <= window_end:
+            return _minutes_to_time(cursor)
+        return None
 
     def generate_plan(self, tasks: list[Task], available_time: int) -> list[Task]:
         """Return the not-done tasks that fit within available_time, in priority order."""
